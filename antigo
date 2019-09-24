@@ -1,0 +1,1712 @@
+
+
+#include <stdlib.h>
+
+#include <string.h>
+
+#include <stdio.h>
+
+#include "../include/support.h"
+
+#include "../include/cthread.h"
+
+#include "../include/cdata.h"
+
+
+
+//Thread states
+
+#define CREATION 0
+
+#define READY 1
+
+#define RUNNING 2
+
+#define BLOCKED 3
+
+#define TERMINATED 4
+
+#define MAIN_TID 0
+
+#define NO_WAITING_THREAD -1
+
+
+
+#define HIGH 0
+
+#define MEDIUM 1
+
+#define LOW 2
+
+
+
+#define PRIO_CHANGE 5
+
+
+
+//Errors
+
+#define INVALID_PRIO_ERROR -0x01
+
+#define GET_CONTEXT_ERROR -0x02
+
+#define SUPPORT_ERROR -0x03
+
+#define CTHREAD_NOT_INITIALIZED -0X04
+
+#define TID_NOT_FOUND_ERROR -0x05
+
+#define READY_H_QUEUE_CREATION_ERROR -0x06
+
+#define READY_M_QUEUE_CREATION_ERROR -0x07
+
+#define READY_L_QUEUE_CREATION_ERROR -0x08
+
+#define EMPTY_SEM_ERROR -0x09
+
+#define APPEND_ERROR -0x0a
+
+#define SCHEDULER_STATE_CHANGE_ERROR -0x0b
+
+#define SEM_QUEUE_CREATION_ERROR -0x0c
+
+#define BLOCKED_QUEUE_CREATION_ERROR -0x0d
+
+#define RUNNING_QUEUE_CREATION_ERROR -0x0e
+
+#define MULTIPLE_CJOIN_TO_SAME_THREAD_ERROR 0x0f
+
+#define CONFIG_MAIN_ERROR 0x10
+
+
+
+
+
+FILA2 ready_h_queue;
+
+FILA2 ready_m_queue;
+
+FILA2 ready_l_queue;
+
+FILA2 blocked_queue;
+
+FILA2 running_queue; 	
+
+
+
+TCB_t*	swapOut;
+
+TCB_t*	swapIn;
+
+/**
+
+	Thread terminada, não pode ser excluída na troca de contexto
+
+*/
+
+TCB_t* lastTerminated;
+
+/**
+
+    Flag que indica se existe thread a ser excluida 1 ou não 0
+
+*/
+
+int hasTerminatedThread;
+
+
+
+/**
+
+    Contexto de execução que será usado quando uma thread acabar
+
+*/
+
+ucontext_t retContext;
+
+//variável global para obtenção de um tid válido e único ao executar ccreate
+
+int next_tid=-1;
+
+int current_id;
+
+int is_cthread_initialized = 0; // 0 = não inicializada, 1 = inicializada
+
+
+
+//flag que indica se foi modificada alguma prioridade
+
+int prio_change = 0;
+
+int current_prio = LOW;
+
+
+
+//
+
+
+
+int scheduler(TCB_t *thread, int new_state); 
+
+int getCurrentRunningThread(TCB_t *thread);
+
+int addToRunning(TCB_t *thread);
+
+int getThreadById( int tid, TCB_t* thread);
+
+
+
+
+
+
+
+
+
+
+
+//################################################################################
+
+
+
+//thread finalizada
+
+
+
+
+
+int exitSync(){
+
+    	int status_get_context = getcontext(&retContext);
+
+	TCB_t* endingThread = (TCB_t*) malloc(sizeof(TCB_t));
+
+	int tid;
+
+	printf("EndingThread tem tid %d\n", endingThread->tid);
+
+    	if(is_cthread_initialized == 0){
+
+        	if(status_get_context!= 0)
+
+            		return GET_CONTEXT_ERROR;
+
+
+
+    	}else{	
+
+        	tid = getCurrentRunningThread(endingThread);
+
+		getThreadById(tid,endingThread);		
+
+		printf("Terminada thread de tid: %d\n", endingThread->state);
+
+        	return scheduler(endingThread, TERMINATED);
+
+	}
+
+	return 0;
+
+}
+
+
+
+//configuração inicial da main
+
+int configMainThread(){
+
+
+
+    	ucontext_t mainContext;
+
+
+
+    	TCB_t* mainTcb;
+
+    	mainTcb = (TCB_t*) malloc(sizeof(TCB_t));
+
+
+
+    	int status_get_main_context = getcontext(&mainContext);
+
+    	if(status_get_main_context!=0)
+
+        	return GET_CONTEXT_ERROR;
+
+
+
+    	mainTcb->prio = LOW;
+
+    	mainTcb->state = RUNNING;
+
+    	mainTcb->tid = MAIN_TID;
+
+    	mainTcb->context = mainContext;
+
+    	mainTcb->data = (int*)NO_WAITING_THREAD;
+
+	printf("Cria a main thread\n");
+
+    	addToRunning(mainTcb); //adiciona a lista de executando pois é essa thread que está em execução
+
+
+
+    	return 0;
+
+}
+
+
+
+//inicialização de filas de contexto
+
+int initCthread(){
+
+
+
+	int status_config_exit_sync = exitSync();
+
+
+
+	if(status_config_exit_sync!= 0)
+
+		return status_config_exit_sync;
+
+
+
+	int status_ready_queue = CreateFila2(&ready_h_queue);
+
+
+
+	if(status_ready_queue!=0)
+
+		return READY_H_QUEUE_CREATION_ERROR;
+
+
+
+	status_ready_queue = CreateFila2(&ready_m_queue);
+
+
+
+	if(status_ready_queue!=0)
+
+		return READY_M_QUEUE_CREATION_ERROR;
+
+
+
+	status_ready_queue = CreateFila2(&ready_l_queue);
+
+
+
+	if(status_ready_queue!=0)
+
+		return READY_L_QUEUE_CREATION_ERROR;
+
+
+
+	int status_blocked_queue = CreateFila2(&blocked_queue);
+
+
+
+	if(status_blocked_queue!=0)
+
+		return BLOCKED_QUEUE_CREATION_ERROR;
+
+
+
+	int status_running_queue = CreateFila2(&running_queue);
+
+
+
+	if(status_running_queue!=0)
+
+		return RUNNING_QUEUE_CREATION_ERROR;
+
+
+
+	int config_main_status = configMainThread();
+
+
+
+	if(config_main_status!=0)
+
+		return CONFIG_MAIN_ERROR;
+
+
+
+	is_cthread_initialized = 1;
+
+
+
+	hasTerminatedThread = 0;
+
+
+
+	
+
+
+
+	return 0;
+
+}
+
+
+
+//gerador de TID
+
+int tidGenerator(){
+
+	if(next_tid == -1){
+
+		initCthread();
+
+		next_tid=0; 
+
+	}
+
+	next_tid++;
+
+	printf("TID gerado: %d\n", next_tid);
+
+	if(next_tid>=0)
+
+	{
+
+
+
+		return next_tid; 
+
+	}
+
+	return -1;
+
+}
+
+
+
+//QUEUE FUNCTIONS
+
+int isQueueEmpty(PFILA2 fila){
+
+    	if(fila->first == NULL)
+
+        	return 1; // is empty
+
+    	else
+
+        	return 0;
+
+}
+
+
+
+int getCurrentRunningThread(TCB_t* thread){
+
+   	//configura o iterador para o primeiro da fila
+
+    	int status_first_fila = FirstFila2(&running_queue);
+
+    	if(status_first_fila!=0)
+
+        	return SUPPORT_ERROR;
+
+    	//pega o conteúdo desse iterador que deve ser a thread em execução
+
+    	thread = GetAtIteratorFila2(&running_queue);
+
+	printf("Pegou thread que esta executando, de tid: %d\n", thread->tid);
+
+    	if(thread == NULL)
+
+        	return SUPPORT_ERROR;
+
+    	return thread->tid;
+
+}
+
+
+
+int queueContainsThread(PFILA2 fila, int tid, TCB_t* ansThread) {
+
+    	int status_first_fila = FirstFila2(fila);
+
+    	if(status_first_fila!=0)
+
+        	return SUPPORT_ERROR;
+
+    	if(isQueueEmpty(fila) == 1)
+
+        	return 0;   // se está vazia não contém a thread
+
+    	TCB_t* thread;
+
+    	//Percorre fila e compara tid
+
+    	do {
+
+        	thread = (TCB_t*)GetAtIteratorFila2(fila);
+
+        	if(thread->tid == tid){
+
+            	//seta a fila para sua posição inicial e retorna verdadeiro
+
+            		status_first_fila = FirstFila2(fila);
+
+            	if(status_first_fila!=0)
+
+                	return SUPPORT_ERROR;
+
+            	ansThread = thread;
+
+            	return 1;
+
+        	}
+
+
+
+    	}while(NextFila2(fila) == 0);
+
+    	//Seta a fila para sua posição inicial
+
+
+
+    	status_first_fila = FirstFila2(fila);
+
+    	if(status_first_fila!=0)
+
+        	return SUPPORT_ERROR;
+
+    	ansThread = NULL; //thread não encontrada ponteiro = NULL
+
+    	return 0;
+
+}
+
+
+
+int getThreadById( int tid, TCB_t* thread){
+
+    	if( queueContainsThread(&running_queue, tid, thread) == 1)
+
+        	return 0;
+
+    	if( queueContainsThread(&ready_h_queue, tid, thread)== 1)
+
+        	return 0;
+
+	if( queueContainsThread(&ready_m_queue, tid, thread)== 1)
+
+        	return 0;
+
+	if( queueContainsThread(&ready_l_queue, tid, thread)== 1)
+
+        	return 0;
+
+    	if( queueContainsThread(&blocked_queue, tid, thread) == 1)
+
+        	return 0;
+
+
+
+    	return TID_NOT_FOUND_ERROR;
+
+}
+
+
+
+//#############Clear terminated thread#################
+
+void clearTerminatedThread(){
+
+    	if(hasTerminatedThread == 1){
+
+        	free(lastTerminated);
+
+        	hasTerminatedThread = 0;
+
+    	}
+
+}
+
+//###################################SCHEDULER#################################
+
+int addToReady(TCB_t *thread){
+
+	thread->state = READY;
+
+	if(thread->prio == HIGH) {
+
+		printf("Thread de TID %d adcionada a fila H\n", thread->tid);
+
+		return AppendFila2(&ready_h_queue, thread);		
+
+	}
+
+	if(thread->prio == MEDIUM) {
+
+		printf("Thread de TID %d adcionada a fila M\n", thread->tid);
+
+		return AppendFila2(&ready_m_queue, thread);
+
+	}
+
+	if(thread->prio == LOW) {
+
+		printf("Thread de TID %d adcionada a fila L\n", thread->tid);
+
+		return AppendFila2(&ready_l_queue, thread);
+
+	}
+
+	printf("Não foi possível adicionar a fila de ready.\n");
+
+	return APPEND_ERROR;
+
+}
+
+
+
+int addToBlocked(TCB_t *thread){
+
+	thread->state = BLOCKED;
+
+    	return AppendFila2(&blocked_queue, thread);
+
+}
+
+
+
+int addToRunning(TCB_t *thread){
+
+    	thread->state = RUNNING;
+
+    	return AppendFila2(&running_queue, thread);
+
+}
+
+
+
+void addToTerminated(TCB_t *thread){
+
+	thread->state = TERMINATED;
+
+    	lastTerminated = thread;
+
+	hasTerminatedThread = 1;
+
+}
+
+
+
+int removeFromReady(){
+
+
+
+	TCB_t *toRemove;	
+
+	
+
+	if(FirstFila2(&ready_h_queue) == 0) {	
+
+		current_prio = HIGH;
+
+		toRemove = (TCB_t*)GetAtIteratorFila2(&ready_h_queue); //checar se precisa &
+
+		swapIn = toRemove;
+
+		if(DeleteAtIteratorFila2(&ready_h_queue) != 0)
+
+			return SCHEDULER_STATE_CHANGE_ERROR;
+
+	
+
+	} else if(FirstFila2(&ready_m_queue) == 0) {	
+
+		current_prio = MEDIUM;
+
+		toRemove = (TCB_t*)GetAtIteratorFila2(&ready_m_queue);
+
+		swapIn = toRemove;
+
+
+
+		if(DeleteAtIteratorFila2(&ready_m_queue) != 0)
+
+			return SCHEDULER_STATE_CHANGE_ERROR;
+
+
+
+	} else if(FirstFila2(&ready_l_queue) == 0) {
+
+		current_prio = LOW;
+
+		toRemove = (TCB_t*)GetAtIteratorFila2(&ready_l_queue);
+
+		swapIn = toRemove;
+
+		if(DeleteAtIteratorFila2(&ready_l_queue) != 0)
+
+			return SCHEDULER_STATE_CHANGE_ERROR;
+
+	} else {
+
+		return SCHEDULER_STATE_CHANGE_ERROR;
+
+	}
+
+	
+
+	if(addToRunning(toRemove) == 0)
+
+		return 0;
+
+
+
+	return SCHEDULER_STATE_CHANGE_ERROR;
+
+}
+
+
+
+int removeFromBlocked(TCB_t *thread){
+
+
+
+	if(FirstFila2(&blocked_queue)!=0)
+
+		return -1;
+
+
+
+	int next_in_queue_status = 0;
+
+	int delete_status;
+
+	TCB_t *t;
+
+	while(next_in_queue_status == 0) {
+
+		t = GetAtIteratorFila2(&blocked_queue);
+
+		if(t->tid == thread->tid) {
+
+			delete_status = DeleteAtIteratorFila2(&blocked_queue);
+
+			if(delete_status == 0)
+
+				return 0;
+
+			else return SCHEDULER_STATE_CHANGE_ERROR;
+
+		}
+
+
+
+		next_in_queue_status = NextFila2(&blocked_queue);
+
+	}
+
+
+
+	return SCHEDULER_STATE_CHANGE_ERROR;
+
+}
+
+
+
+int removeFromRunning(TCB_t *thread, int new_state){
+
+
+
+	printf("Tentando remover thread de tid %d da fila de running.\n", thread->tid);
+
+	
+
+	if(FirstFila2(&running_queue) != 0) {
+
+	
+
+		printf("Fila de running se encontra vazia\n");
+
+
+
+		return -1;
+
+	}
+
+	FirstFila2(&running_queue);
+
+	int aux =DeleteAtIteratorFila2(&running_queue); 
+
+	if(aux!= 0){
+
+		return -1;
+
+	}
+
+	printf("Thread de tid %d removida de running com sucesso\n", thread->tid);
+
+	swapOut = thread;
+
+	
+
+	if(new_state==READY)
+
+		if(addToReady(thread)!=0)
+
+            		return SCHEDULER_STATE_CHANGE_ERROR;
+
+
+
+	if(new_state==BLOCKED)
+
+
+
+		if(addToBlocked(thread)!=0)
+
+
+
+            		return SCHEDULER_STATE_CHANGE_ERROR;
+
+
+
+    	if(new_state==TERMINATED) {
+
+
+
+		addToTerminated(thread);
+
+
+
+		if((int)thread->data != NO_WAITING_THREAD) {
+
+
+
+			TCB_t* toUnblock = NULL;
+
+
+
+			getThreadById((int)thread->data, toUnblock);
+
+
+
+			removeFromBlocked(toUnblock);
+
+
+
+		}
+
+	}	
+
+	return 0;
+
+}
+
+
+
+int swapcontext2(ucontext_t *oucp, ucontext_t *ucp) {
+
+    int swapped = 0;
+
+    ucontext_t *AUX = (ucontext_t*) malloc(sizeof(ucontext_t));
+
+    int result = getcontext(AUX);
+
+    if (result == 0 && !swapped) {
+
+        swapped = 1;
+
+        result = setcontext(ucp);
+
+    }
+
+
+
+    return result;
+
+}
+
+
+
+
+
+int preempThread() {
+
+	TCB_t *thread;
+
+//	TCB_t* auxiliar = swapOut;
+
+//	printf("\n-->>%d<<--",auxiliar);	
+
+	
+
+//printf("\n-->>%d<<--",swapOut);	
+
+	
+
+int returdoswap;
+
+	printf("Tentativa de preeempção.\n");
+
+	
+
+	if(FirstFila2(&running_queue) != 0) {
+
+		if(removeFromReady() == 0) { 
+
+			printf("Troca de contexto entre %d e %d\n",swapOut->tid, swapIn->tid);
+
+		//addToRunning(swapIn);
+
+		
+
+		returdoswap= swapcontext(&(swapOut->context),&(swapIn->context));
+
+				if (returdoswap==1){
+
+				printf("\n\nERRO SWAP\n\n");}
+
+
+
+			return 0;
+
+		}
+
+	}	
+
+
+
+	thread = (TCB_t*)GetAtIteratorFila2(&running_queue);
+
+	if(FirstFila2(&ready_h_queue) == 0 && current_prio >= HIGH){ 
+
+		removeFromRunning(thread, READY);
+
+		if(removeFromReady() == 0) { 
+
+			printf("Troca de contexto alta entre %d e %d\n\n",swapOut->tid, swapIn->tid);
+
+		
+
+			returdoswap=swapcontext(&(swapOut->context),&(swapIn->context));
+
+					
+
+			if (returdoswap==1){
+
+				printf("\n\nERRO SWAP\n\n");}
+
+	
+
+
+
+printf("fez swap \n");
+
+			return 0;
+
+		}	
+
+		
+
+	}	
+
+
+
+	else if(FirstFila2(&ready_m_queue) == 0 && current_prio == MEDIUM){
+
+		removeFromRunning(thread, READY);
+
+		if(removeFromReady() == 0) { 
+
+			printf("Troca de contexto entre %d e %d\n\n",swapOut->tid, swapIn->tid);
+
+		
+
+	//		addToRunning(swapIn);
+
+		//	addToReady(swapOut);		
+
+
+
+	returdoswap = swapcontext(&(swapOut->context),&(swapIn->context));
+
+			if (returdoswap==1){
+
+				printf("\n\nERRO SWAP\n\n");}
+
+
+
+			return 0;
+
+		}
+
+	}else if(FirstFila2(&ready_m_queue) == 0 && current_prio == LOW){
+
+		removeFromRunning(thread, READY);
+
+		if(removeFromReady() == 0) { 
+
+			printf("Troca de contexto entre %d e %d\n\n",swapOut->tid, swapIn->tid);
+
+//			addToRunning(swapIn);
+
+		//	addToReady(swapOut);		
+
+
+
+			returdoswap = swapcontext(&(swapOut->context),&(swapIn->context));
+
+			if (returdoswap==1){
+
+				printf("\n\nERRO SWAP\n\n");}
+
+
+
+			return 0;
+
+		}
+
+	}	
+
+	printf("Manteve context.\n");
+
+	return 0;
+
+		
+
+}
+
+
+
+int removeIfFound(TCB_t *thread_rem, PFILA2 fila) {
+
+	int tid = thread_rem->tid; 
+
+	int status_first_fila = FirstFila2(fila);
+
+    	if(status_first_fila!=0)
+
+        	return SUPPORT_ERROR;
+
+    	if(isQueueEmpty(fila) == 1)
+
+        	return 0;   // se está vazia não contém a thread
+
+    	TCB_t* thread;
+
+    	//Percorre fila e compara tid
+
+    	do {
+
+        	thread = (TCB_t*)GetAtIteratorFila2(fila);
+
+        	if(thread->tid == tid){
+
+			DeleteAtIteratorFila2(fila);
+
+            	//seta a fila para sua posição inicial e retorna verdadeiro
+
+            		status_first_fila = FirstFila2(fila);
+
+            	if(status_first_fila!=0)
+
+                	return SUPPORT_ERROR;
+
+            	return 0;
+
+        	}
+
+    	}while(NextFila2(fila) == 0);
+
+	return 1;
+
+}
+
+
+
+int correctPriority(TCB_t *thread) {
+
+	if(thread->state == TERMINATED)
+
+		return 0;
+
+	if(thread->state == BLOCKED)
+
+		return 0;
+
+	if(thread->state == RUNNING){
+
+		current_prio = thread->prio;
+
+		return preempThread();
+
+	}
+
+	if(removeIfFound(thread, &ready_h_queue) == -1)
+
+		return -1;
+
+	if(removeIfFound(thread, &ready_m_queue) == -1)
+
+		return -1;
+
+	if(removeIfFound(thread, &ready_l_queue) == -1)
+
+		return -1;
+
+	if(addToReady(thread) == 0)
+
+		return preempThread();
+
+	return (-1);
+
+}
+
+
+
+
+
+int scheduler(TCB_t *thread, int new_state){
+
+	int scheduler_status=0;
+
+
+
+	printf("Iniciado escalonador, state: %d\n \n \n", thread->state);
+
+
+
+	if(new_state == PRIO_CHANGE) {		
+
+		printf("Houve alteração de prioridade.\n");
+
+		correctPriority(thread);
+
+		
+
+	}
+
+
+
+	else if(thread->state==CREATION) {
+
+		printf("\n thread no estado de criacao\n");
+
+		scheduler_status = addToReady(thread);
+
+		if(scheduler_status == 0) {
+
+			printf("preempr do scheduer criacao\n");
+
+
+
+		preempThread();	
+
+			printf("\n criou com successo.\n");
+
+			return 0;
+
+		}
+
+	
+
+	} 
+
+	else if(thread->state==READY) {
+
+		printf(" tread no estado de pronto\n");
+
+	
+
+		preempThread();
+
+		
+
+	} 
+
+	else if(thread->state==BLOCKED) 
+
+	{
+
+		scheduler_status = removeFromBlocked(thread);
+
+			if(scheduler_status == 0)
+
+			 {
+
+				scheduler_status = addToReady(thread);
+
+					if(scheduler_status == 0) {
+
+						preempThread();
+
+					}
+
+			 }
+
+		
+
+	} 
+
+	else if(thread->state==RUNNING) {
+
+	scheduler_status = removeFromRunning(thread, new_state);
+
+		
+
+		if(scheduler_status == 0) {
+
+		printf("\n thread no estado de rodando\n");
+
+
+
+			preempThread();
+
+		}
+
+	
+
+}	
+
+		
+
+	
+
+
+
+	printf("Escalonador obteve resultado incorreto.\n \n");
+
+	return scheduler_status;
+
+}
+
+int ccreateusado=0;
+
+
+
+//###################CCREATE##############################
+
+/******************************************************************************
+
+Parâmetros:
+
+	start:	ponteiro para a função que a thread executará.
+
+	arg:	um parâmetro que pode ser passado para a thread na sua criação.
+
+	prio:	Valores numéricos válidos 0, 1 e 2  (0 = alta prioridade, 1 = média prioridade, 2 = baixa prioridade).
+
+	Demais valores são considerados inválidos e a função deve retornar com código de erro.
+
+Retorno:
+
+	Se correto => Valor positivo, que representa o identificador da thread criada
+
+	Se erro	   => Valor negativo.
+
+******************************************************************************/
+
+int ccreate (void* (*start)(void*), void *arg, int prio) {
+
+	
+
+	if (ccreateusado==1){
+
+	return -1;	
+
+	}
+
+
+
+	ccreateusado=1;
+
+	printf("CC create iniciado\n\n");
+
+
+
+
+
+	if(prio<0 || prio>2)
+
+		return INVALID_PRIO_ERROR;
+
+	
+
+	ucontext_t newThreadContext;
+
+	char thread_stack[SIGSTKSZ]; 	//pilha para a thread em criação 
+
+	int ret_code; 			//flag para identificar o tipo de retorno de getcontext
+
+	int t_tid;
+
+	//clearTerminatedThread(); 	//se existe thread em estado de término elimina ela da memória ADD
+
+	TCB_t* tcb;
+
+	tcb = (TCB_t*) malloc(sizeof(TCB_t)); //thread control block
+
+	ret_code = getcontext(&newThreadContext);
+
+	//contexto para o qual o fluxo de execução deve voltar após a
+
+	//finalização da thread
+
+	newThreadContext.uc_link = &retContext;
+
+	//configuração da pilha da nova thread
+
+	newThreadContext.uc_stack.ss_sp = thread_stack;
+
+	newThreadContext.uc_stack.ss_size = SIGSTKSZ;
+
+	//cria o contexto da nova thread que deve iniciar na função
+
+	//start que receberá um argumento passado em arg, isso será
+
+	//feito usando o stub passado abaixo
+
+	
+
+	makecontext(&newThreadContext, (void (*) (void)) start, 1,arg);
+
+	//administração do novo tid
+
+	t_tid = tidGenerator();
+
+	printf("Criada thread com tid: %d\n", t_tid);
+
+	//por algum motivo o createNewTid está atualizando o valor de next_tid mas retorna um valor desatualizado então estou usando direto next_tid ADD	
+
+	tcb->tid = t_tid;
+
+	tcb->state = CREATION;
+
+	tcb->prio = prio;
+
+	tcb->data = (int*)NO_WAITING_THREAD;
+
+	tcb->context = newThreadContext;
+
+		printf(" if ret_cde \n\n");
+
+
+
+	if(ret_code >= 0){
+
+		printf("scheduler\n");
+
+
+
+		int hasError = scheduler(tcb, CREATION);
+
+				printf("\n voltou do scheduler\n");
+
+
+
+		if(hasError!= 0)
+
+          		return SUPPORT_ERROR;
+
+	
+
+		
+
+		return tcb->tid;
+
+  		}
+
+		else
+
+		return GET_CONTEXT_ERROR;
+
+}
+
+
+
+
+
+//##########################CSETPRIO#######################################
+
+/*Parâmetros: 
+
+tid: identificador da thread cuja prioridade será alterada (deixar sempre esse campo como NULL em 2018/02) 
+
+prio: nova prioridade da thread. 
+
+Retorno: 
+
+  Quando executada corretamente: retorna 0 (zero) 
+
+  Caso contrário, retorna um valor negativo.
+
+*/
+
+int csetprio(int tid, int prio) {
+
+return -1;
+
+
+
+	TCB_t* toSetPrio = NULL;
+
+	int get_thread_by_id_status;
+
+	
+
+	clearTerminatedThread();
+
+	if(prio<0 || prio>2)
+
+		return INVALID_PRIO_ERROR;
+
+	if(is_cthread_initialized == 0){
+
+        	return CTHREAD_NOT_INITIALIZED;
+
+    	}
+
+	
+
+	get_thread_by_id_status = getThreadById(tid, toSetPrio);
+
+	if (get_thread_by_id_status!=0)
+
+        	return get_thread_by_id_status;
+
+	toSetPrio->prio = prio;
+
+	scheduler(toSetPrio, PRIO_CHANGE);
+
+	return 0;
+
+}
+
+
+
+
+
+//###########################CYIELD########################################
+
+/*
+
+Retorno: 
+
+  Quando executada corretamente: retorna 0 (zero) 
+
+  Caso contrário, retorna um valor negativo.
+
+*/
+
+int cyield(void) {
+
+return -1;	
+
+	clearTerminatedThread(); //se existe thread em estado de término elimina ela da memória
+
+	if(is_cthread_initialized == 0){
+
+        	return CTHREAD_NOT_INITIALIZED;
+
+    	}
+
+
+
+	TCB_t* currentTCB = NULL;
+
+    	int current_thread_status = getCurrentRunningThread(currentTCB);
+
+	printf("ctyeasd");	
+
+	if (current_thread_status != 0)
+
+        	return current_thread_status;
+
+	scheduler(currentTCB, READY);
+
+	return 0;
+
+}
+
+
+
+//###########################CJOIN#####################################	
+
+
+
+int cjoin(int tid) {
+
+	return -1;
+
+
+
+	printf("Acionado cjoin com tid  %d\n", tid);
+
+	clearTerminatedThread(); 
+
+    	if(is_cthread_initialized == 0){
+
+        	return CTHREAD_NOT_INITIALIZED;
+
+    	}
+
+    	TCB_t* currentTCB = (TCB_t*) malloc(sizeof(TCB_t));
+
+    	TCB_t* toWait = (TCB_t*) malloc(sizeof(TCB_t));
+
+    	//thread atual
+
+    	int get_current_thread_return = getCurrentRunningThread(currentTCB);
+
+	if (get_current_thread_return != 0) {
+
+		free(currentTCB);
+
+		free(toWait);
+
+        	return get_current_thread_return;
+
+	}
+
+	//thread a esperar
+
+    	int get_thread_by_id_return = (getThreadById(tid, toWait));
+
+    	if (get_thread_by_id_return!=0) {
+
+		free(currentTCB);
+
+		free(toWait);
+
+	        return get_thread_by_id_return;
+
+	}
+
+	
+
+	if(toWait->state == TERMINATED)	
+
+		return 0;
+
+
+
+    	// verifica se não existe outra thread esperando pela mesma
+
+    	if((int)toWait->data != (int)NO_WAITING_THREAD) {
+
+		//free(currentTCB);
+
+		//free(toWait);
+
+		printf("Já existe thread esperando por essa\n");
+
+		return MULTIPLE_CJOIN_TO_SAME_THREAD_ERROR;
+
+	}
+
+
+
+
+
+    	//se não avisa a thread que está esperando por ela
+
+    	toWait->data = (int*)currentTCB->tid;
+
+	
+
+    	//coloca o estado dessa thread em bloqueado
+
+    	scheduler(currentTCB, BLOCKED);
+
+	return 0;
+
+}
+
+
+
+//############################CSEM_INIT###############################################
+
+/*Parâmetros: 
+
+	sem: ponteiro para uma variável do tipo csem_t. Aponta para uma estrutura de dados que representa a variável semáforo. 
+
+	count: valor a ser usado na inicialização do semáforo. Representa a quantidade de recursos controlados pelo semáforo. 
+
+Retorno: 
+
+  	Quando executada corretamente: retorna 0 (zero) 
+
+  	Caso contrário, retorna um valor negativo.
+
+*/
+
+int csem_init(csem_t *sem, int count) {
+
+	return -1;
+
+    	clearTerminatedThread(); //se existe thread em estado de término elimina ela da memória
+
+	PFILA2 sem_queue = NULL;
+
+
+
+	if (CreateFila2(sem_queue) != 0)
+
+		return SEM_QUEUE_CREATION_ERROR;
+
+
+
+	sem->count = count;
+
+	sem->fila = sem_queue;
+
+
+
+	return 0;
+
+}
+
+
+
+//#########################CWAIT############################### ADD
+
+/*
+
+Parâmetros: 
+
+  sem: ponteiro para uma variável do tipo semáforo. 
+
+Retorno: 
+
+  Quando executada corretamente: retorna 0 (zero) 
+
+  Caso contrário, retorna um valor negativo.
+
+*/
+
+int cwait(csem_t *sem) {
+
+	return -1;
+
+    	clearTerminatedThread(); //se existe thread em estado de término elimina ela da memória
+
+	TCB_t *running;
+
+	TCB_t *at_iterator;
+
+
+
+	if (sem->count > 0) // Se o semáforo estiver livre, decrementa contador
+
+		sem->count --;
+
+	else {   // Senão, põe a thread em bloqueado inclui na fila
+
+
+
+		running = GetAtIteratorFila2(&running_queue);
+
+		FirstFila2(sem->fila);
+
+		int inserted = 0;
+
+		while(inserted == 0){
+
+			at_iterator = GetAtIteratorFila2(sem->fila);
+
+			if(running->prio < at_iterator->prio) {
+
+				inserted = 1;
+
+				if(InsertBeforeIteratorFila2(sem->fila, running) != 0)
+
+					return -1;		
+
+			}
+
+			if(NextFila2(sem->fila) != 0) {
+
+				inserted = 1;
+
+				if (AppendFila2 (sem->fila, running) != 0)
+
+					return -1;
+
+			}
+
+		}	
+
+		scheduler(running, BLOCKED);
+
+	}
+
+	return 0;
+
+}
+
+
+
+//#############################CSIGNAL################################
+
+/*
+
+Parâmetros: 
+
+  sem: ponteiro para uma variável do tipo semáforo. 
+
+Retorno: 
+
+  Quando executada corretamente: retorna 0 (zero) 
+
+  Caso contrário, retorna um valor negativo.
+
+*/
+
+int csignal(csem_t *sem) {
+
+		return -1;
+
+    	clearTerminatedThread();
+
+
+
+	TCB_t *toUnblock;
+
+
+
+	if (sem->count > 0)
+
+		return EMPTY_SEM_ERROR;
+
+	if (sem->count <= 0) {
+
+		sem->count ++;
+
+		if (FirstFila2(sem->fila) == 0) { // Se houver, retira e desbloqueia a primeira thread da fila
+
+			toUnblock = GetAtIteratorFila2 (sem->fila);
+
+			DeleteAtIteratorFila2 (sem->fila);
+
+			scheduler(toUnblock, READY);
+
+		}	
+
+	}
+
+
+
+	return 0;
+
+}
+
+
+
+int cidentify (char *name, int size) {
+
+	strncpy(name, "Leonardo Ferrazza 250333\nMaurício Holler Guntzel 273108", size);
+
+	return 0;
+
+}
+
+
+

@@ -39,8 +39,8 @@ TCB_t* verifica_qual_liberar_semafaro(PFILA2 fila){
 
     FirstFila2(fila);
 
-    auxiliar1 = (TCB_t*)GetAtIteratorFila(fila);
-    auxiliar2 = (TCB_t*)GetAtIteratorFila(fila);
+    auxiliar1 = (TCB_t*)GetAtIteratorFila2(fila);
+    auxiliar2 = (TCB_t*)GetAtIteratorFila2(fila);
 
     if (auxiliar1->prio == ALTA_PRIORIDADE){
         DeleteAtIteratorFila2(fila);
@@ -50,7 +50,7 @@ TCB_t* verifica_qual_liberar_semafaro(PFILA2 fila){
 
         while(NextFila2 == 0){
 
-                    auxiliar2 = (TCB_t*)GetAtIteratorFila(fila);
+                    auxiliar2 = (TCB_t*)GetAtIteratorFila2(fila);
 
                     if (auxiliar2->prio == ALTA_PRIORIDADE){
                     DeleteAtIteratorFila2(fila);
@@ -68,6 +68,8 @@ TCB_t* verifica_qual_liberar_semafaro(PFILA2 fila){
         FirstFila2(fila);
 
         while(NextFila2 == 0){
+
+                    auxiliar2 = (TCB_t*)GetAtIteratorFila2(fila);
 
                 if (auxiliar1->prio == auxiliar2->prio){
                     DeleteAtIteratorFila2(fila);

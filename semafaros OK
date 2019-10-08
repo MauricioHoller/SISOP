@@ -173,8 +173,6 @@ return -1;
 }
 
 
-
-
 TCB_t* verifica_qual_liberar_semafaro(PFILA2 fila){
 
     TCB_t* auxiliar1;
@@ -187,24 +185,20 @@ TCB_t* verifica_qual_liberar_semafaro(PFILA2 fila){
     FirstFila2(fila);
 
     auxiliar1 = (TCB_t*)GetAtIteratorFila2(fila);
-    int a,b;
 
     FirstFila2(fila);
     auxiliar2 = (TCB_t*)GetAtIteratorFila2(fila);
 
     if (auxiliar1->prio == ALTA_PRIORIDADE){
 
-        //DeleteAtIteratorFila2(fila);
-
-     a=   coloca_apto(auxiliar1);
-        return -1;
+        DeleteAtIteratorFila2(fila);
 
         return auxiliar1;
     }
     else {
-        b=0;
+
         while(auxiliar2->tid != ultimofila->tid ){
-    b++;
+
     NextFila2(fila);
                     auxiliar2 = (TCB_t*)GetAtIteratorFila2(fila);
 
@@ -217,8 +211,6 @@ TCB_t* verifica_qual_liberar_semafaro(PFILA2 fila){
                     auxiliar1= auxiliar2;
                     }
 
-        if (b == 4){
-        break;}
 
         }
 
@@ -344,11 +336,16 @@ int a;
 }
 
 int cjoin(int tid) {
+
+
+
 	return -1;
 }
 
+
+
+
 int csem_init(csem_t *sem, int count) {
-    csem_t aux;
 
     sem->count = count;
 

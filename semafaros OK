@@ -1,0 +1,437 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "../include/support.h"
+#include "../include/cthread.h"
+#include "../include/cdata.h"
+
+PFILA2 fila_apto_alta_prioridade;
+PFILA2 fila_apto_media_prioridade;
+PFILA2 fila_apto_baixa_prioridade;
+PFILA2 fila_bloqueado;
+
+PFILA2 fila_executando;
+
+//###############
+int tid_executando = 5;
+int prioridade_executando=2;
+//#################
+#define ALTA_PRIORIDADE 0
+#define MEDIA_PRIORIDADE 1
+#define BAIXA_PRIORIDADE 2
+
+TCB_t*	swapOut;
+TCB_t*	swapIn;
+
+int eh_main=0;
+
+int somadortid=10;
+
+
+int ccreateusado=0;
+
+ucontext_t retContext;//    Contexto de execução que será usado quando uma thread acabar
+void inicializalistas(){
+
+    CreateFila2 ((PFILA2)&fila_apto_alta_prioridade);
+
+    CreateFila2 ((PFILA2)&fila_apto_baixa_prioridade);
+
+    CreateFila2 ((PFILA2)&fila_apto_media_prioridade);
+
+    CreateFila2 ((PFILA2)&fila_bloqueado);
+
+    CreateFila2 ((PFILA2)&fila_executando);
+
+    ccreateusado=1;
+}
+
+
+int coloca_apto(TCB_t *thread){
+
+	thread->state = PROCST_APTO;
+
+
+	if(thread->prio == 0) {
+		printf("Thread de TID %d adcionada a fila H\n", thread->tid);
+		return AppendFila2((PFILA2) &fila_apto_alta_prioridade,(void *) thread);
+	}
+	if(thread->prio == 1) {
+		printf("Thread de TID %d adcionada a fila M\n", thread->tid);
+		return AppendFila2((PFILA2) &fila_apto_media_prioridade,(void *) thread);
+	}
+	if(thread->prio == 2) {
+		printf("Thread de TID %d adcionada a fila L\n", thread->tid);
+		return AppendFila2((PFILA2) &fila_apto_baixa_prioridade,(void *) thread);
+	}
+	printf("Não foi possível adicionar a fila de ready.\n");
+	return -21;
+}
+
+
+
+
+
+TCB_t* Configura_Thread_Main(){
+
+    	ucontext_t mainContext;
+
+    	TCB_t* mainTcb;
+
+    	mainTcb = (TCB_t*) malloc(sizeof(TCB_t));
+
+    	int status_get_main_context = getcontext(&mainContext);
+
+    	if(status_get_main_context!=0){
+        	return NULL;
+            }
+
+    	mainTcb->prio = prioridade_executando;
+
+    	mainTcb->state = PROCST_EXEC; //coloca em executando porque né
+
+    	mainTcb->tid = tid_executando;
+
+    	mainTcb->context = mainContext;
+
+
+    	return mainTcb;
+}
+
+TCB_t* Configura_Thread_sem(){
+
+    	ucontext_t mainContext;
+
+    	TCB_t* mainTcb;
+
+    	mainTcb = (TCB_t*) malloc(sizeof(TCB_t));
+
+    	int status_get_main_context = getcontext(&mainContext);
+
+    	if(status_get_main_context!=0){
+        	return NULL;
+            }
+
+    	mainTcb->prio = prioridade_executando;
+
+    	mainTcb->state = PROCST_BLOQ; //coloca em bloqueado;
+
+    	mainTcb->tid = tid_executando;
+
+    	mainTcb->context = mainContext;
+
+    	return mainTcb;
+}
+
+void troca_de_contexto(){
+
+int a;
+
+a=swapcontext(&(swapOut->context),&(swapIn->context));
+
+printf ("%d \n",a);
+}
+
+
+int verifica_filas_apto(){
+
+	if( FirstFila2((PFILA2)&fila_apto_alta_prioridade) == 0) { //tem elemento na fila de alta prioridade entao o removemos e colocamos em execução por ser round robin o primeiro é escolhido.
+
+       // printf("iterador \n");
+
+		swapIn = (TCB_t*) GetAtIteratorFila2((PFILA2)&fila_apto_alta_prioridade); //checar se precisa &
+
+        printf("swapin tcb alta %d \n",swapIn->tid);
+
+        DeleteAtIteratorFila2((PFILA2)&fila_apto_alta_prioridade);
+
+       // printf("dell %d\n", swapIn->tid);
+
+        return 0;
+
+	} else if(FirstFila2((PFILA2)&fila_apto_media_prioridade) == 0) {
+
+		swapIn = (TCB_t*)GetAtIteratorFila2((PFILA2)&fila_apto_media_prioridade);
+
+        printf("swapin tcb meida %d \n",swapIn->tid);
+
+		DeleteAtIteratorFila2((PFILA2)&fila_apto_media_prioridade);
+
+        return 0;
+
+	} else if(FirstFila2((PFILA2)&fila_apto_baixa_prioridade) == 0) {
+
+		swapIn = (TCB_t*)GetAtIteratorFila2((PFILA2)&fila_apto_baixa_prioridade);
+
+        printf("swapin tcb bauxa %d \n",swapIn->tid);
+
+		DeleteAtIteratorFila2((PFILA2)&fila_apto_baixa_prioridade);
+
+        return 0;
+	}
+return -1;
+}
+
+
+
+
+TCB_t* verifica_qual_liberar_semafaro(PFILA2 fila){
+
+    TCB_t* auxiliar1;
+    TCB_t* auxiliar2;
+    TCB_t* ultimofila;
+
+    LastFila2(fila);
+    ultimofila=(TCB_t*)GetAtIteratorFila2(fila);
+
+    FirstFila2(fila);
+
+    auxiliar1 = (TCB_t*)GetAtIteratorFila2(fila);
+    int a,b;
+
+    FirstFila2(fila);
+    auxiliar2 = (TCB_t*)GetAtIteratorFila2(fila);
+
+    if (auxiliar1->prio == ALTA_PRIORIDADE){
+
+        //DeleteAtIteratorFila2(fila);
+
+     a=   coloca_apto(auxiliar1);
+        return -1;
+
+        return auxiliar1;
+    }
+    else {
+        b=0;
+        while(auxiliar2->tid != ultimofila->tid ){
+    b++;
+    NextFila2(fila);
+                    auxiliar2 = (TCB_t*)GetAtIteratorFila2(fila);
+
+                    if (auxiliar2->prio == ALTA_PRIORIDADE){
+                    DeleteAtIteratorFila2(fila);
+                    return auxiliar2;
+                    }
+
+                    if (auxiliar1->prio < auxiliar2->prio){
+                    auxiliar1= auxiliar2;
+                    }
+
+        if (b == 4){
+        break;}
+
+        }
+
+        FirstFila2(fila);
+
+        while(auxiliar2->tid != ultimofila->tid){
+                    NextFila2(fila);
+                    auxiliar2 = (TCB_t*)GetAtIteratorFila2(fila);
+
+                if (auxiliar1->prio == auxiliar2->prio){
+                    DeleteAtIteratorFila2(fila);
+
+                    return auxiliar1;
+                }
+        }
+
+
+
+    }
+
+    return NULL;
+
+}
+
+
+
+
+
+
+
+
+int ccreate (void* (*start)(void*), void *arg, int prio) {
+
+    if (ccreateusado==0){ //inicializa todas as listas de prioridades.
+	inicializalistas();
+
+	}
+
+
+	if(prio<0 || prio>2){
+		printf("erro de prioridade");
+		return -1;
+
+	}
+
+	ucontext_t contexto_nova_thread;    //  cria variavel com o contexto da tread
+
+	char pilha_thread[SIGSTKSZ]; 	//pilha para a thread em criação  SIGSTKSZ tamanho da pilha ja definido pelo linux
+
+	int t_tid; // numero da tread criada
+
+	//clearTerminatedThread(); 	//se existe thread em estado de término elimina ela da memória ADD
+
+	TCB_t* tcb; //ponteiro do tcb
+
+	tcb = (TCB_t*) malloc(sizeof(TCB_t)); //thread control block
+
+	 if( 0 == getcontext(&contexto_nova_thread)){
+	//contexto para o qual o fluxo de execução deve voltar após a
+	//finalização da thread
+
+	contexto_nova_thread.uc_link = &retContext;
+	//configuração da pilha da nova thread
+
+	contexto_nova_thread.uc_stack.ss_sp = pilha_thread;
+
+	contexto_nova_thread.uc_stack.ss_size = SIGSTKSZ;
+	//cria o contexto da nova thread que deve iniciar na função
+	//start que receberá um argumento passado em arg, isso será
+	//feito usando o stub passado abaixo
+
+	makecontext(&contexto_nova_thread, (void (*) (void)) start, 1,arg);
+	//administração do novo tid
+
+	t_tid = somadortid;
+
+    somadortid++;
+
+	tcb->tid = t_tid;
+
+	tcb->state = PROCST_APTO; //verificar com o professor se precisa colocar como estado de criação
+
+	tcb->prio = prio;
+
+	tcb->context = contexto_nova_thread;
+    coloca_apto(tcb);
+
+ //   printf("tcb criado  %d \n" , tcb->tid);
+
+
+    return tcb->tid;
+
+  		}
+
+	printf("error");
+
+	return -1;
+
+	}
+
+
+int cyield(void) {
+int a;
+
+    swapOut = Configura_Thread_Main();
+    coloca_apto(swapOut);
+
+    a = verifica_filas_apto();
+    if (a <0){
+        return -1;
+    }
+    tid_executando =swapIn->tid;
+
+    prioridade_executando= swapIn->prio;
+
+    printf("\n swap in %d \n", swapIn->tid);
+    printf("\n swap out %d \n", swapOut->tid);
+
+    troca_de_contexto();
+
+	return 0;
+
+}
+
+int cjoin(int tid) {
+	return -1;
+}
+
+int csem_init(csem_t *sem, int count) {
+    csem_t aux;
+
+    sem->count = count;
+
+    sem->fila = (PFILA2) malloc(sizeof(FILA2));
+
+    CreateFila2(sem->fila);
+
+    printf("\naqui %d \n",sem->count);
+
+    return 0;
+	return -1;
+}
+
+int cwait(csem_t *sem) {
+int a;
+	if (sem->count > 0) {
+
+        sem->count--;
+
+    printf("\n entrou %d \n",sem->count);
+
+        return 0;
+	}
+	else{
+        sem->count--;
+
+        printf("\n nao entro %d \n",sem->count);
+
+        swapOut = Configura_Thread_Main();
+
+        swapOut->state = PROCST_BLOQ;
+
+        AppendFila2((PFILA2) &sem->fila, (void *) swapOut);
+
+       a = verifica_filas_apto();
+        if (a <0){
+            return -1;
+        }
+
+        tid_executando =swapIn->tid;
+
+        prioridade_executando= swapIn->prio;
+
+        troca_de_contexto();
+
+        return 0;
+	}
+
+	return -1;
+}
+
+int csignal(csem_t *sem) {
+	TCB_t *desbloquear;
+
+	if (sem->count > 0)
+		{
+		printf("errou");
+
+		return -1;
+		}
+	else
+	 {
+
+		sem->count ++;
+
+
+
+    desbloquear= verifica_qual_liberar_semafaro((PFILA2) &sem->fila);
+
+        coloca_apto(desbloquear);
+
+            }
+
+
+	return 0;
+
+
+	return -1;
+}
+
+int cidentify (char *name, int size) {
+	strncpy (name, "Sergio Cechin - 2019/2 - Teste de compilacao.", size);
+	return 0;
+}
+
+
